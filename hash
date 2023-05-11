@@ -1,0 +1,262 @@
+using System;
+using System.IO;
+using System.Windows.Forms;
+
+namespace HashFileOrganization
+{
+    public partial class MainForm : Form
+    {
+        private const int MaxRecords = 1000;
+        private const int RecordSize = 50;
+        private const int HashTableSize = 100;
+
+        private string fileName;
+        private int[] hashTable;
+        private BinaryReader reader;
+        private BinaryWriter writer;
+
+        public MainForm()
+        {
+            InitializeComponent();
+        }
+
+        private void MainForm_Load(object sender, EventArgs e)
+        {
+            hashTable = new int[HashTableSize];
+            for (int i = 0; i < HashTableSize; i++)
+            {
+                hashTable[i] = -1;
+            }
+        }
+
+        private void createFileButton_Click(object sender, EventArgs e)
+        {
+            using (SaveFileDialog dialog = new SaveFileDialog())
+            {
+                dialog.Filter = "Binary Files (*.bin)|*.bin";
+                if (dialog.ShowDialog() == DialogResult.OK)
+                {
+                    fileName = dialog.FileName;
+
+                    // Create the file and write the hash table to it
+                    using (FileStream stream = File.Create(fileName))
+                    {
+                        writer = new BinaryWriter(stream);
+                        for (int i = 0; i < HashTableSize; i++)
+                        {
+                            writer.Write(hashTable[i]);
+                        }
+                    }
+                }
+            }
+        }
+
+        private void deleteFileButton_Click(object sender, EventArgs e)
+        {
+            if (fileName != null)
+            {
+                File.Delete(fileName);
+                fileName = null;
+                hashTable = new int[HashTableSize];
+                for (int i = 0; i < HashTableSize; i++)
+                {
+                    hashTable[i] = -1;
+                }
+                MessageBox.Show("File deleted.");
+            }
+            else
+            {
+                MessageBox.Show("No file to delete.");
+            }
+        }
+
+        private void openFileButton_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog dialog = new OpenFileDialog())
+            {
+                dialog.Filter = "Binary Files (*.bin)|*.bin";
+                if (dialog.ShowDialog() == DialogResult.OK)
+                {
+                    fileName = dialog.FileName;
+
+                    // Read the hash table from the file
+                    using (FileStream stream = File.OpenRead(fileName))
+                    {
+                        reader = new BinaryReader(stream);
+                        for (int i = 0; i < HashTableSize; i++)
+                        {
+                            hashTable[i] = reader.ReadInt32();
+                        }
+                    }
+                }
+            }
+        }
+
+        private void insertButton_Click(object sender, EventArgs e)
+        {
+            if (fileName == null)
+            {
+                MessageBox.Show("No file open.");
+                return;
+            }
+
+            int recordNumber = int.Parse(recordNumberTextBox.Text);
+            if (recordNumber < 0 || recordNumber >= MaxRecords)
+            {
+                MessageBox.Show($"Record number must be between 0 and {MaxRecords - 1}.");
+                return;
+            }
+
+            string data = dataTextBox.Text.PadRight(RecordSize);
+            byte[] record = System.Text.Encoding.ASCII.GetBytes(data);
+
+            // Hash the record number to find the bucket
+            int bucket = recordNumber % HashTableSize;
+
+            // Search for an empty slot in the bucket
+            int slot = hashTable[bucket];
+            while (slot != -1)
+            {
+                // Check if the slot is already occupied by the same record
+                byte[] existingRecord = ReadRecord(slot);
+                if (existingRecord != null && BitConverter.ToInt32(existingRecord, 0) == recordNumber)
+                {
+                    MessageBox.Show("Record already exists.");
+                    return;
+                }
+
+                // Move to the next slot in the bucket
+                slot = BitConverter.ToInt32(existingRecord, 4);
+            }
+
+            // Write the record to the file
+            slot = (int)writer.BaseStream.Length;
+            writer.BaseStream.Seek(slot, SeekOrigin.Begin);
+            writer.Write(record);
+
+            // Update the hash table
+            hashTable[bucket] = slot;
+            writer.BaseStream.Seek(bucket * sizeof(int), SeekOrigin.Begin);
+            writer.Write(slot);
+
+            MessageBox.Show("Record inserted.");
+        }
+
+        private void displayButton_Click(object sender, EventArgs e)
+        {
+            if (fileName == null)
+            {
+                MessageBox.Show("No file open.");
+                return;
+            }
+
+            recordsListBox.Items.Clear();
+            for (int i = 0; i < HashTableSize; i++)
+            {
+                int slot = hashTable[i];
+                while (slot != -1)
+                {
+                    byte[] record = ReadRecord(slot);
+                    if (record != null)
+                    {
+                        int recordNumber = BitConverter.ToInt32(record, 0);
+                        string data = System.Text.Encoding.ASCII.GetString(record, 4, RecordSize).TrimEnd();
+                        recordsListBox.Items.Add($"{recordNumber}: {data}");
+                    }
+                    slot = BitConverter.ToInt32(record, 4);
+                }
+            }
+        }
+
+        private void searchButton_Click(object sender, EventArgs e)
+        {
+            if (fileName == null)
+            {
+                MessageBox.Show("No file open.");
+                return;
+            }
+
+            int recordNumber = int.Parse(recordNumberTextBox.Text);
+            if (recordNumber < 0 || recordNumber >= MaxRecords)
+            {
+                MessageBox.Show($"Record number must be between 0 and {MaxRecords - 1}.");
+                return;
+            }
+
+            // Hash the record number to find the bucket
+            int bucket = recordNumber % HashTableSize;
+
+            // Search for the record in the bucket
+            int slot = hashTable[bucket];
+            while (slot != -1)
+            {
+                byte[] record = ReadRecord(slot);
+                if (record != null && BitConverter.ToInt32(record, 0) == recordNumber)
+                {
+                    string data = System.Text.Encoding.ASCII.GetString(record, 4, RecordSize).TrimEnd();
+                    MessageBox.Show($"{recordNumber}: {data}");
+                    return;
+                }
+                slot = BitConverter.ToInt32(record, 4);
+            }
+
+            MessageBox.Show("Record not found.");
+        }
+
+        private void modifyButton_Click(object sender, EventArgs e)
+        {
+            if (fileName == null)
+            {
+                MessageBox.Show("No file open.");
+                return;
+            }
+
+            int recordNumber = int.Parse(recordNumberTextBox.Text);
+            if (recordNumber < 0 || recordNumber >= MaxRecords)
+            {
+                MessageBox.Show($"Record number must be between 0 and {MaxRecords - 1}.");
+                return;
+            }
+
+            string data = dataTextBox.Text.PadRight(RecordSize);
+            byte[] record = System.Text.Encoding.ASCII.GetBytes(data);
+
+            // Hash the record number to find the bucket
+            int bucket = recordNumber % HashTableSize;
+
+            // Search for the record in the bucket
+            int slot = hashTable[bucket];
+            while (slot != -1)
+            {
+                byte[] existingRecord = ReadRecord(slot);
+                if (existingRecord != null && BitConverter.ToInt32(existingRecord, 0) == recordNumber)
+                {
+                    // Overwrite the existing record with the new record
+                    writer.BaseStream.Seek(slot, SeekOrigin.Begin);
+                    writer.Write(record);
+
+                    MessageBox.Show("Record modified.");
+                    return;
+                }
+                slot = BitConverter.ToInt32(existingRecord, 4);
+            }
+
+            MessageBox.Show("Record not found.");
+        }
+
+        private byte[] ReadRecord(int slot)
+        {
+            reader.BaseStream.Seek(slot, SeekOrigin.Begin);
+            byte[] record = new byte[RecordSize + 4];
+            int bytesRead = reader.Read(record, 0, record.Length);
+            if (bytesRead == record.Length)
+            {
+                return record;
+            }
+            else
+            {
+                return null;
+            }
+        }
+    }
+}
